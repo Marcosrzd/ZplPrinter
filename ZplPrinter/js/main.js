@@ -22,7 +22,7 @@ var defaults ={
     keepTcpSocket: false,
     saveLabels: false,
     filetype: '1',
-    path: null,
+    path: 'C\\temp\\',
     counter: 0
 };
 
@@ -80,7 +80,7 @@ function saveLabel (blob, ext) {
 
 function savePdf (zpl, density, width, height) {
     var xhr = new XMLHttpRequest();
-    xhr.open('POST', 'http://api.labelary.com/v1/printers/{0}dpmm/labels/{1}x{2}/0/'.format(density, width, height), true);
+    xhr.open('POST', 'https://api.labelary.com/v1/printers/{0}dpmm/labels/{1}x{2}/0/'.format(density, width, height), true);
     xhr.setRequestHeader('Accept', 'application/pdf');
     xhr.setRequestHeader('Content-type', 'application/x-www-form-urlencoded');
     xhr.responseType = 'blob';
@@ -168,36 +168,33 @@ function startTcpServer () {
                 //     }
                 // }
 
-                var xhr = new XMLHttpRequest();
-                xhr.open('POST', 'http://api.labelary.com/v1/printers/{0}dpmm/labels/{1}x{2}/0/'.format(configs.density, width, height), true);
-                xhr.setRequestHeader('Content-type', 'application/x-www-form-urlencoded');
-                xhr.responseType = 'blob';
-                xhr.onload = function(e) {
-                    if (this.status == 200) {
-                        var blob = this.response;
-                        // if (configs['saveLabels']) {
-                        //     if (configs['filetype'] == '1') {
-                        //         saveLabel(blob, 'png');
-                        //     }
-                        // }
+                try {
+                    var ipc = require('electron').ipcRenderer;
+                    ipc.invoke('render-zpl', {
+                        density: configs.density,
+                        width: width,
+                        height: height,
+                        zpl: zpl
+                    }).then(function(base64) {
+                        if (!base64) return;
                         var size = getSize(width, height);
                         var img = document.createElement('img');
                         img.setAttribute('height', size.height);
                         img.setAttribute('width', size.width);
                         img.setAttribute('class', 'thumbnail');
-                        img.onload = function(e) {
-                            window.URL.revokeObjectURL(img.src);
-                        };
-
-                        img.src = window.URL.createObjectURL(blob);
-
+                        img.onload = function(e) {};
+                        img.src = 'data:image/png;base64,' + base64;
                         $('#label').prepend(img);
                         var offset = size.height + 20;
                         $('#label').css({ 'top': '-' + offset + 'px' });
                         $('#label').animate({ 'top': '0px' }, 1500);
-                    }
-                };
-                xhr.send(zpl);
+                    }).catch(function(err){
+                        console.error(err);
+                        notify('Erro ao renderizar ZPL: ' + err.message + '\nVerifique se o ZPL tem ^XA ... ^XZ e comandos que geram elementos.', 'exclamation-sign', 'danger', 6000);
+                    });
+                } catch (err) {
+                    console.error(err);
+                }
             }
         });
         // chrome.sockets.tcp.getInfo(clientInfo.clientSocketId, function (socketInfo) {
@@ -280,8 +277,9 @@ function initEvents () {
         btn.html($(this).text() + ' <span class="caret"></span>');
     });
 
+    // Allow manual editing of the path textbox
     $('#txt-path').keydown(function(e) {
-        e.preventDefault();
+        // no-op: let user type
     });
 
     $('#configsForm').submit(function(e) {
@@ -305,17 +303,16 @@ function initEvents () {
     });
 
     $('#btn-path').click(function() {
-        // chrome.fileSystem.chooseEntry({
-        //     type: 'openDirectory',
-        // }, function (entry) {
-        //     if (chrome.runtime.lastError) {
-        //         console.info(chrome.runtime.lastError.message);
-        //     } else {
-        //         initPath(entry);
-        //         pathEntry = entry;
-        //         retainEntry = chrome.fileSystem.retainEntry(entry);
-        //     }
-        // });
+        try {
+            var ipc = require('electron').ipcRenderer;
+            ipc.invoke('choose-path').then(function(dir) {
+                if (dir) {
+                    $('#txt-path').val(dir);
+                }
+            }).catch(function(err){ console.error(err); });
+        } catch (err) {
+            console.error(err);
+        }
     });
 
 }
@@ -346,7 +343,7 @@ function saveConfigs () {
         } else if (key == 'keepTcpSocket') {
             configs[key] = $('#ckb-keep-tcp-socket').is(':checked');
         } else if (key == 'path') {
-            configs[key] = retainEntry;
+            configs[key] = $('#txt-path').val();
         } else {
             configs[key] = $('#' + key).val();
         }
@@ -380,12 +377,17 @@ function initConfigs () {
             startTcpServer();
         } else if (key == 'keepTcpSocket') {
             $('#ckb-keep-tcp-socket').prop('checked', configs[key]);
-        } else if (key == 'path' && configs[key]) {
-            retainEntry = configs[key];
-            // chrome.fileSystem.restoreEntry(configs[key], function (entry) {
-            //     pathEntry = entry;
-            //     initPath(entry);
-            // });
+        } else if (key == 'path') {
+            try {
+                var fs = require('fs');
+                var p = configs[key] || 'C\\\\temp\\\\';
+                if (!fs.existsSync(p)) {
+                    fs.mkdirSync(p, { recursive: true });
+                }
+                $('#txt-path').val(p);
+            } catch (err) {
+                console.error(err);
+            }
         } else {
             $('#' + key).val(configs[key]);
         }
